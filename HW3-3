@@ -1,0 +1,158 @@
+#include <stdio.h>
+#include <math.h>
+
+// 埃爾米特插值結構體
+typedef struct {
+    double t;    // 時間
+    double d;    // 距離
+    double v;    // 速度（一階導數）
+} HermitePoint;
+
+// 計算三次埃爾米特插值
+double hermite_interpolation(HermitePoint p[], double t) {
+    double t0 = p[0].t, t1 = p[1].t;
+    double h = t1 - t0;
+    double s = (t - t0) / h;
+    
+    // 計算基函數
+    double h00 = (1 - 3*s*s + 2*s*s*s);
+    double h10 = s * (1 - 2*s + s*s) * h;
+    double h01 = s*s * (3 - 2*s);
+    double h11 = s*s * (s - 1) * h;
+    
+    return p[0].d * h00 + p[0].v * h10 + p[1].d * h01 + p[1].v * h11;
+}
+
+// 計算插值導數（速度）
+double hermite_derivative(HermitePoint p[], double t) {
+    double t0 = p[0].t, t1 = p[1].t;
+    double h = t1 - t0;
+    double s = (t - t0) / h;
+    
+    // 基函數導數
+    double dh00 = (-6*s + 6*s*s)/h;
+    double dh10 = (1 - 4*s + 3*s*s);
+    double dh01 = (6*s - 6*s*s)/h;
+    double dh11 = (3*s*s - 2*s);
+    
+    return p[0].d * dh00 + p[0].v * dh10 + p[1].d * dh01 + p[1].v * dh11;
+}
+
+int main() {
+    // 輸入數據（時間, 距離, 速度）
+    HermitePoint data[] = {
+        {0, 0, 75},   // t=0, d=0, v=75
+        {3, 225, 77},
+        {5, 383, 80},
+        {8, 623, 74},
+        {13, 993, 72}
+    };
+    int n = sizeof(data)/sizeof(data[0]);
+
+    // 問題3a: 預測t=10秒的位置和速度
+    HermitePoint segment[2];
+    
+    // 選擇包含t=10的區間（t=8到t=13）
+    segment[0] = data[3]; // t=8
+    segment[1] = data[4]; // t=13
+    
+    double t = 10.0;
+    double position = hermite_interpolation(segment, t);
+    double speed = hermite_derivative(segment, t);
+    
+    printf("問題3a結果:\n");
+    printf("在 t=10.0s 時:\n");
+    printf("  預測位置: %.2f 英尺\n", position);
+    printf("  預測速度: %.2f ft/s\n", speed);
+    
+    // 問題3b: 檢查是否超速（55 mph = 80.67 ft/s）
+    printf("\n問題3b結果:\n");
+    double speed_limit = 80.67;
+    int overspeed = 0;
+    double first_overspeed_time = -1;
+    
+    // 檢查每個區間
+    for (int i = 0; i < n-1; i++) {
+        segment[0] = data[i];
+        segment[1] = data[i+1];
+        
+        // 在區間內搜索極值點
+        double t_start = data[i].t;
+        double t_end = data[i+1].t;
+        
+        // 簡單線性搜索（可改為更精確的方法）
+        for (double t_check = t_start; t_check <= t_end; t_check += 0.01) {
+            double current_speed = hermite_derivative(segment, t_check);
+            if (current_speed > speed_limit) {
+                overspeed = 1;
+                first_overspeed_time = t_check;
+                break;
+            }
+        }
+        if (overspeed) break;
+    }
+    
+    if (overspeed) {
+        printf("汽車在 t=%.2fs 首次超速 (55 mph = 80.67 ft/s)\n", first_overspeed_time);
+    } else {
+        printf("汽車未超速\n");
+    }
+    
+    // 問題3c: 計算最大速度
+    printf("\n問題3c結果:\n");
+    double max_speed = 0;
+    double max_speed_time = 0;
+    
+    for (int i = 0; i < n-1; i++) {
+        segment[0] = data[i];
+        segment[1] = data[i+1];
+        
+        // 檢查區間端點
+        double speed_start = hermite_derivative(segment, data[i].t);
+        double speed_end = hermite_derivative(segment, data[i+1].t);
+        
+        // 檢查極值點（導數為零的位置）
+        // 解二次方程求極值點
+        double a = 3*(data[i].d + data[i+1].d) - (data[i].v + 2*data[i+1].v)*(data[i+1].t - data[i].t);
+        double b = -6*(data[i].d + data[i+1].d) + (2*data[i].v + data[i+1].v)*(data[i+1].t - data[i].t);
+        double c = 3*data[i].d - data[i].v*(data[i+1].t - data[i].t);
+        
+        double discriminant = b*b - 4*a*c;
+        if (discriminant >= 0) {
+            double s1 = (-b + sqrt(discriminant))/(2*a);
+            double s2 = (-b - sqrt(discriminant))/(2*a);
+            
+            if (s1 >= 0 && s1 <= 1) {
+                double t_extreme = data[i].t + s1*(data[i+1].t - data[i].t);
+                double v_extreme = hermite_derivative(segment, t_extreme);
+                if (v_extreme > max_speed) {
+                    max_speed = v_extreme;
+                    max_speed_time = t_extreme;
+                }
+            }
+            if (s2 >= 0 && s2 <= 1) {
+                double t_extreme = data[i].t + s2*(data[i+1].t - data[i].t);
+                double v_extreme = hermite_derivative(segment, t_extreme);
+                if (v_extreme > max_speed) {
+                    max_speed = v_extreme;
+                    max_speed_time = t_extreme;
+                }
+            }
+        }
+        
+        // 比較端點速度
+        if (speed_start > max_speed) {
+            max_speed = speed_start;
+            max_speed_time = data[i].t;
+        }
+        if (speed_end > max_speed) {
+            max_speed = speed_end;
+            max_speed_time = data[i+1].t;
+        }
+    }
+    
+    printf("汽車最大速度: %.2f ft/s (約 %.2f mph)\n", max_speed, max_speed*0.681818);
+    printf("發生時間: t=%.2fs\n", max_speed_time);
+
+    return 0;
+}
