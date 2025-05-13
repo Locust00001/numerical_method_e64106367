@@ -1,0 +1,158 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+// 定義矩陣和向量的大小 (本題為 6x6)
+#define N 6
+
+// 函數：印出向量
+void print_vector(double vec[N], const char* name, int iteration) {
+    if (iteration == 0) {
+        printf("%s: [", name);
+    } else if (iteration == -1) { // 用於非迭代步驟的向量
+        printf("%s: [", name);
+    }
+    else {
+        printf("迭代 %d: %s = [", iteration, name);
+    }
+    for (int i = 0; i < N; i++) {
+        printf("%10.6f", vec[i]);
+        if (i < N - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+}
+
+// 函數：矩陣-向量乘法 (result = M * v)
+void matrix_vector_mult(double M[N][N], double v[N], double result[N]) {
+    for (int i = 0; i < N; i++) {
+        result[i] = 0.0;
+        for (int j = 0; j < N; j++) {
+            result[i] += M[i][j] * v[j];
+        }
+    }
+}
+
+// 函數：向量點積 (dot_product = v1_T * v2)
+double dot_product(double v1[N], double v2[N]) {
+    double result = 0.0;
+    for (int i = 0; i < N; i++) {
+        result += v1[i] * v2[i];
+    }
+    return result;
+}
+
+
+int main() {
+    // --- 作業設定 ---
+    // A_sym 矩陣 (對稱版本)
+    double A[N][N] = {
+        {4.0, -1.0,  0.0, -1.0,  0.0,  0.0},
+        {-1.0, 4.0, -1.0,  0.0, -1.0,  0.0},
+        {0.0, -1.0,  4.0,  0.0,  1.0, -1.0}, 
+        {-1.0,  0.0,  0.0,  4.0, -1.0, -1.0}, 
+        {0.0, -1.0,  0.0, -1.0,  4.0, -1.0},
+        {0.0,  0.0, -1.0,  0.0, -1.0,  4.0}
+    };
+
+    // b 向量
+    double b_vec[N] = {0.0, -1.0, 9.0, 4.0, 8.0, 6.0}; // Renamed to b_vec to avoid conflict
+
+    // 初始猜測 x^(0)
+    double x[N] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    double x_old[N]; // 用於收斂性檢查
+
+    // 迭代中使用的向量
+    double v_k[N];      // 搜尋方向 v^(k) (在最速下降法中即為殘差 r^(k))
+    double Av_k[N];     // A * v^(k)
+
+    // 迭代次數和容忍度
+    int max_iterations = 20; // 最速下降法可能需要更多迭代
+    double tolerance = 1e-6; // 收斂容忍度 (可以針對 x 或殘差 v_k)
+    double residual_tolerance = 1e-6; // 針對殘差的容忍度
+
+    printf("=== 最速下降法 (共軛梯度法筆記版本) 求解 Ax = b ===\n");
+    printf("A 矩陣:\n");
+    for(int i=0; i<N; i++) {
+        for(int j=0; j<N; j++) {
+            printf("%5.1f ", A[i][j]);
+        }
+        printf("\n");
+    }
+    printf("b 向量: ");
+    print_vector(b_vec, "b", -1);
+    printf("初始 x^(0): ");
+    print_vector(x, "x", 0);
+    printf("最大迭代次數: %d\n\n", max_iterations);
+
+    // --- 最速下降法迭代 ---
+    for (int k = 0; k < max_iterations; k++) {
+        // 儲存 x_old 用於收斂性檢查
+        for(int i=0; i<N; i++) {
+            x_old[i] = x[i];
+        }
+
+        // 1. 計算搜尋方向 v^(k) = b - Ax^(k) (即殘差 r^(k))
+        double Ax_current[N];
+        matrix_vector_mult(A, x, Ax_current);
+        for (int i = 0; i < N; i++) {
+            v_k[i] = b_vec[i] - Ax_current[i];
+        }
+
+        // 檢查殘差是否收斂 (可選的提前退出條件)
+        double norm_v_k = 0.0;
+        for(int i=0; i<N; i++) norm_v_k += v_k[i] * v_k[i];
+        norm_v_k = sqrt(norm_v_k); // L2 norm
+
+        if (norm_v_k < residual_tolerance) {
+            printf("\n在 %d 次迭代後，殘差範數 (%.2e) 小於容忍度 %.1e，判定為收斂。\n", k, norm_v_k, residual_tolerance);
+            break; // 這裡 k 是迭代開始時的計數，所以是 k 次迭代產生了這個 v_k
+        }
+
+
+        // 2. 計算 t_k = (v^(k)?v^(k)) / (v^(k)?Av^(k))
+        double v_k_T_v_k = dot_product(v_k, v_k);
+
+        matrix_vector_mult(A, v_k, Av_k); // Av_k = A * v_k
+        double v_k_T_Av_k = dot_product(v_k, Av_k);
+
+        double t_k;
+        if (fabs(v_k_T_Av_k) < 1e-12) { // 避免除以零
+            printf("\n迭代 %d: 分母 v_k_T_Av_k (%.2e) 過小，可能已達解或方法失效。提前終止。\n", k + 1, v_k_T_Av_k);
+            break;
+        }
+        t_k = v_k_T_v_k / v_k_T_Av_k;
+
+
+        // 3. 更新 x^(k+1) = x^(k) + t_k * v^(k)
+        for (int i = 0; i < N; i++) {
+            x[i] = x[i] + t_k * v_k[i];
+        }
+
+        // 印出當前迭代的結果
+        printf("迭代 %d: t_k = %10.6f, ||v_k|| = %10.6f\n", k + 1, t_k, norm_v_k);
+        print_vector(x, "x", k + 1);
+
+        // 檢查 x 的變化是否收斂
+        double max_diff_x = 0.0;
+        for (int i = 0; i < N; i++) {
+            double diff = fabs(x[i] - x_old[i]);
+            if (diff > max_diff_x) {
+                max_diff_x = diff;
+            }
+        }
+        if (max_diff_x < tolerance) {
+            printf("\n在 %d 次迭代後，x 的變化量小於容忍度 %.1e，判定為收斂。\n", k + 1, tolerance);
+            break;
+        }
+        if (k == max_iterations - 1 && (max_diff_x >= tolerance && norm_v_k >= residual_tolerance) ) {
+            printf("\n達到最大迭代次數 %d，可能未完全收斂 (最大 x 差異: %.2e, 殘差範數: %.2e)。\n", max_iterations, max_diff_x, norm_v_k);
+        }
+    }
+
+    printf("\n--- 共軛梯度法之最終解 (近似值) ---\n");
+    print_vector(x, "x_final", -1);
+
+    return 0;
+}
