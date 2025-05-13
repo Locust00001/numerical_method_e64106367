@@ -1,0 +1,124 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+// 定義矩陣和向量的大小 (本題為 6x6)
+#define N 6
+
+// 函數：印出向量
+void print_vector(double vec[N], const char* name, int iteration) {
+    if (iteration == 0) {
+        printf("%s: [", name);
+    } else if (iteration == -1) { // 用於非迭代步驟的向量
+        printf("%s: [", name);
+    }
+    else {
+        printf("迭代 %d: %s = [", iteration, name);
+    }
+    for (int i = 0; i < N; i++) {
+        printf("%10.6f", vec[i]);
+        if (i < N - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+}
+
+int main() {
+    // --- 作業設定 ---
+    // A_sym 矩陣 (對稱版本)
+    double A[N][N] = {
+         {4.0, -1.0,  0.0, -1.0,  0.0,  0.0},
+        {-1.0, 4.0, -1.0,  0.0, -1.0,  0.0},
+        {0.0, -1.0,  4.0,  0.0,  1.0, -1.0}, 
+        {-1.0,  0.0,  0.0,  4.0, -1.0, -1.0}, 
+        {0.0, -1.0,  0.0, -1.0,  4.0, -1.0},
+        {0.0,  0.0, -1.0,  0.0, -1.0,  4.0}
+    };
+
+    // b 向量
+    double b[N] = {0.0, -1.0, 9.0, 4.0, 8.0, 6.0};
+
+    // 初始猜測 x^(0)
+    double x[N] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; // 目前迭代的 x
+    double x_old_iter[N]; // 用於儲存當前迭代開始時的 x 值 (x_i^(k))
+                          // 也用於計算 sum_ax_after 和收斂性檢查
+
+    // 迭代次數和鬆弛因子
+    int max_iterations = 10; // 你可以調整這個值
+    double tolerance = 1e-6; // 收斂容忍度
+    double omega = 1.2;      // 鬆弛因子 (通常 0 < omega < 2)
+
+    printf("=== SOR 法求解 Ax = b (ω = %.2f) ===\n", omega);
+    printf("A 矩陣:\n");
+    for(int i=0; i<N; i++) {
+        for(int j=0; j<N; j++) {
+            printf("%5.1f ", A[i][j]);
+        }
+        printf("\n");
+    }
+    printf("b 向量: ");
+    print_vector(b, "b", -1);
+    printf("初始 x^(0): ");
+    print_vector(x, "x", 0);
+    printf("最大迭代次數: %d\n\n", max_iterations);
+
+
+    // --- SOR 迭代 ---
+    for (int k = 0; k < max_iterations; k++) {
+        // 儲存當前迭代開始時的 x 值 (即 x^(k))
+        for (int i = 0; i < N; i++) {
+            x_old_iter[i] = x[i];
+        }
+
+        for (int i = 0; i < N; i++) {
+            double sum_ax_before = 0.0; // Σ_{j<i} a_ij * x_j^(k+1)
+            double sum_ax_after = 0.0;  // Σ_{j>i} a_ij * x_j^(k)
+
+            // 計算 Σ_{j<i} a_ij * x_j^(k+1)
+            // 這裡的 x[j] 已經是本次迭代 k+1 更新過的值
+            for (int j = 0; j < i; j++) {
+                sum_ax_before += A[i][j] * x[j];
+            }
+
+            // 計算 Σ_{j>i} a_ij * x_j^(k)
+            // 這裡的 x_old_iter[j] 是本次迭代開始時的值，即 x_j^(k)
+            for (int j = i + 1; j < N; j++) {
+                sum_ax_after += A[i][j] * x_old_iter[j];
+            }
+
+            // 計算高斯-賽德爾的更新部分 (我們先稱為 x_gs_i)
+            double x_gs_i = (b[i] - sum_ax_before - sum_ax_after) / A[i][i];
+
+            // 應用 SOR 公式
+            // x_i^(k+1) = (1-ω)x_i^(k) + ω * x_gs_i
+            x[i] = (1.0 - omega) * x_old_iter[i] + omega * x_gs_i;
+        }
+
+        // 檢查收斂性 (比較 x 和 x_old_iter)
+        double max_diff = 0.0;
+        for (int i = 0; i < N; i++) {
+            double diff = fabs(x[i] - x_old_iter[i]);
+            if (diff > max_diff) {
+                max_diff = diff;
+            }
+        }
+
+        // 印出當前迭代的結果
+        print_vector(x, "x", k + 1);
+
+        // 如果差異小於容忍度，則提前停止
+        if (max_diff < tolerance) {
+            printf("\n在 %d 次迭代後，差異小於容忍度 %.1e，判定為收斂。\n", k + 1, tolerance);
+            break;
+        }
+        if (k == max_iterations - 1 && max_diff >= tolerance) {
+            printf("\n達到最大迭代次數 %d，可能未完全收斂 (最大差異: %.2e)。\n", max_iterations, max_diff);
+        }
+    }
+
+    printf("\n--- SOR 法 (ω = %.2f) 最終解 (近似值) ---\n", omega);
+    print_vector(x, "x_final", -1);
+
+    return 0;
+}
