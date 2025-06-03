@@ -1,0 +1,371 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+// ODE: y'' = p_orig(x)y' + q_orig(x)y + r_orig(x)
+// HW: y'' = -(x+1)y' + 2y + (1-x^2)e^(-x)
+double p_orig_func(double x) {
+    return -(x + 1.0);
+}
+
+double q_orig_func(double x) {
+    return 2.0;
+}
+
+double r_orig_func(double x) {
+    return (1.0 - x * x) * exp(-x);
+}
+
+// --- Thomas Algorithm (TDMA) for tridiagonal systems ---
+// Solves Ax = b for x, where A is tridiagonal.
+// l: lower diagonal (size n_eq-1, l[0] is for 2nd eq)
+// d: main diagonal (size n_eq)
+// u: upper diagonal (size n_eq-1, u[0] is for 1st eq)
+// b_rhs: right hand side (size n_eq)
+// x_sol: solution vector (size n_eq) - will be filled
+// n_eq: number of equations
+void tdma_solve(double *l, double *d, double *u, double *b_rhs, double *x_sol, int n_eq) {
+    if (n_eq == 0) return;
+    if (n_eq == 1) {
+        if (fabs(d[0]) < 1e-12) {fprintf(stderr, "TDMA division by zero (n_eq=1, d[0]=0).\n"); exit(EXIT_FAILURE);}
+        x_sol[0] = b_rhs[0] / d[0];
+        return;
+    }
+
+    double *c_prime = (double *)malloc((n_eq - 1) * sizeof(double));
+    double *d_prime = (double *)malloc(n_eq * sizeof(double));
+
+    if (!c_prime || !d_prime) {
+        fprintf(stderr, "Memory allocation failed in TDMA.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Forward elimination
+    if (fabs(d[0]) < 1e-12) {fprintf(stderr, "TDMA division by zero (d[0]=0).\n"); free(c_prime); free(d_prime); exit(EXIT_FAILURE);}
+    c_prime[0] = u[0] / d[0];
+    d_prime[0] = b_rhs[0] / d[0];
+
+    for (int i = 1; i < n_eq; i++) {
+        double den = d[i] - l[i-1] * c_prime[i-1];
+        if (fabs(den) < 1e-12) {fprintf(stderr, "TDMA division by zero (denominator in loop at i=%d).\n", i); free(c_prime); free(d_prime); exit(EXIT_FAILURE);}
+        if (i < n_eq - 1) {
+            c_prime[i] = u[i] / den;
+        }
+        d_prime[i] = (b_rhs[i] - l[i-1] * d_prime[i-1]) / den;
+    }
+    
+    // Backward substitution
+    x_sol[n_eq - 1] = d_prime[n_eq - 1];
+    for (int i = n_eq - 2; i >= 0; i--) {
+        x_sol[i] = d_prime[i] - c_prime[i] * x_sol[i+1];
+    }
+
+    free(c_prime);
+    free(d_prime);
+}
+
+
+// --- 1. Shooting Method ---
+// System for RK4:
+// dy/dx = z
+// dz/dx = p_orig(x)z + q_orig(x)y + r_val (r_val is r_orig(x) or 0)
+void ode_system_for_rk4(double x, double y_val, double z_val, double *dydx, double *dzdx, int use_r_func, double current_r_val_if_not_func) {
+    *dydx = z_val;
+    double r_term = use_r_func ? r_orig_func(x) : current_r_val_if_not_func;
+    *dzdx = p_orig_func(x) * z_val + q_orig_func(x) * y_val + r_term;
+}
+
+void rk4_step_system(double x0, double y0, double z0, double h_step, 
+                     double *y1_out, double *z1_out, int r_is_used_for_ode) {
+    double k1y, k1z, k2y, k2z, k3y, k3z, k4y, k4z;
+
+    ode_system_for_rk4(x0,               y0,                       z0,                       &k1y, &k1z, r_is_used_for_ode, 0.0);
+    ode_system_for_rk4(x0 + h_step/2.0,  y0 + k1y*h_step/2.0,      z0 + k1z*h_step/2.0,      &k2y, &k2z, r_is_used_for_ode, 0.0);
+    ode_system_for_rk4(x0 + h_step/2.0,  y0 + k2y*h_step/2.0,      z0 + k2z*h_step/2.0,      &k3y, &k3z, r_is_used_for_ode, 0.0);
+    ode_system_for_rk4(x0 + h_step,      y0 + k3y*h_step,          z0 + k3z*h_step,          &k4y, &k4z, r_is_used_for_ode, 0.0);
+
+    *y1_out = y0 + (h_step/6.0) * (k1y + 2.0*k2y + 2.0*k3y + k4y);
+    *z1_out = z0 + (h_step/6.0) * (k1z + 2.0*k2z + 2.0*k3z + k4z);
+}
+
+// Solves IVP, returns y(x_end). Fills y_solution_array if not NULL.
+// r_active: 1 if r(x) term is included (for u, final y), 0 if not (for v)
+double solve_ivp_for_shooting(double x_start, double y_start, double z_start, 
+                               double x_end, double h_step, int r_active, 
+                               double* y_solution_array_optional, int num_steps) {
+    double x = x_start;
+    double y = y_start;
+    double z = z_start;
+    
+    if (y_solution_array_optional) y_solution_array_optional[0] = y;
+
+    for (int i = 0; i < num_steps; i++) {
+        rk4_step_system(x, y, z, h_step, &y, &z, r_active);
+        x += h_step;
+        if (y_solution_array_optional && (i + 1) <= num_steps) { // Ensure bounds
+             y_solution_array_optional[i+1] = y;
+        }
+    }
+    return y; // y at x_end
+}
+
+void shooting_method(double a, double b, double alpha, double beta, double h) {
+    printf("\n--- a. 射擊法 (Shooting Method) ---\n");
+    int n_intervals = round((b - a) / h);
+
+    // Solve for u(x): u'' = p*u' + q*u + r, u(a)=alpha, u'(a)=s1 (guess s1=0)
+    double s1_guess = 0.0;
+    double u_b = solve_ivp_for_shooting(a, alpha, s1_guess, b, h, 1, NULL, n_intervals); // r_active = 1
+
+    // Solve for v(x): v'' = p*v' + q*v, v(a)=0, v'(a)=s2 (guess s2=1)
+    double s2_guess = 1.0;
+    double v_b = solve_ivp_for_shooting(a, 0.0, s2_guess, b, h, 0, NULL, n_intervals);   // r_active = 0
+
+    if (fabs(v_b) < 1e-9) {
+        printf("警告: v(b) 接近零 (%e) 使用 s2=1. 嘗試 s2=2.\n", v_b);
+        s2_guess = 2.0;
+        v_b = solve_ivp_for_shooting(a, 0.0, s2_guess, b, h, 0, NULL, n_intervals);
+        if (fabs(v_b) < 1e-9) {
+             printf("錯誤: v(b) 仍然為零 (%e) 使用 s2=2. 射擊法失敗。\n", v_b);
+             return;
+        }
+    }
+    
+    double C_const = (beta - u_b) / v_b;
+    double Z0_actual = s1_guess + C_const * s2_guess;
+    printf("計算得到的初始斜率 y'(a) = %f\n", Z0_actual);
+
+    double *y_sol_shooting = (double *)malloc((n_intervals + 1) * sizeof(double));
+    if (!y_sol_shooting) { fprintf(stderr, "記憶體分配失敗 (shooting solution array).\n"); exit(EXIT_FAILURE); }
+    
+    solve_ivp_for_shooting(a, alpha, Z0_actual, b, h, 1, y_sol_shooting, n_intervals);
+
+    printf("x\t\ty_shooting\n");
+    for (int i = 0; i <= n_intervals; i++) {
+        printf("%.2f\t\t%f\n", a + i * h, y_sol_shooting[i]);
+    }
+    free(y_sol_shooting);
+}
+
+// --- 2. Finite Difference Method ---
+void finite_difference_method(double a, double b, double alpha, double beta, double h) {
+    printf("\n--- b. 有限差分法 (Finite Difference Method) ---\n");
+    int n_interior = round((b - a) / h) - 1; 
+    if (n_interior <= 0) {
+        fprintf(stderr, "內部節點數量不足以進行有限差分法. 請檢查 h. n_interior = %d\n", n_interior);
+        return;
+    }
+
+    double *l_diag = (double *)malloc((n_interior - 1) * sizeof(double)); 
+    double *d_diag = (double *)malloc(n_interior * sizeof(double));       
+    double *u_diag = (double *)malloc((n_interior - 1) * sizeof(double)); 
+    double *rhs    = (double *)malloc(n_interior * sizeof(double));       
+    double *y_interior_sol = (double *)malloc(n_interior * sizeof(double));   
+
+    if (!l_diag || !d_diag || !u_diag || !rhs || !y_interior_sol) {
+        fprintf(stderr, "記憶體分配失敗 (FDM).\n");
+        exit(EXIT_FAILURE);
+    }
+
+    for (int i_eq = 0; i_eq < n_interior; i_eq++) { // i_eq is 0-indexed array index for unknown y_{i_eq+1}
+        double x_node = a + (i_eq + 1) * h; // x-coordinate for current unknown y_{i_eq+1}
+        double pi_node = p_orig_func(x_node);
+        double qi_node = q_orig_func(x_node);
+        double ri_node = r_orig_func(x_node);
+
+        // -(1 + h/2 * p_i)y_{i-1} + (2 + h^2 * q_i)y_i - (1 - h/2 * p_i)y_{i+1} = -h^2 * r_i
+        // Main diagonal entry for y_{i_eq+1}
+        d_diag[i_eq] = 2.0 + h * h * qi_node;
+        rhs[i_eq] = -h * h * ri_node;
+
+        if (i_eq == 0) { // First equation (for y_1)
+            u_diag[i_eq] = -(1.0 - 0.5 * h * pi_node); // Coeff of y_2
+            // Term with y_0 = alpha moves to RHS
+            rhs[i_eq] += (1.0 + 0.5 * h * pi_node) * alpha; 
+        } else if (i_eq == n_interior - 1) { // Last equation (for y_n)
+            l_diag[i_eq-1] = -(1.0 + 0.5 * h * pi_node); // Coeff of y_{n-1}
+            // Term with y_{n+1} = beta moves to RHS
+            rhs[i_eq] += (1.0 - 0.5 * h * pi_node) * beta; 
+        } else { // Interior equations
+            u_diag[i_eq]   = -(1.0 - 0.5 * h * pi_node); // Coeff of y_{i+1}
+            l_diag[i_eq-1] = -(1.0 + 0.5 * h * pi_node); // Coeff of y_{i-1}
+        }
+    }
+
+    tdma_solve(l_diag, d_diag, u_diag, rhs, y_interior_sol, n_interior);
+
+    printf("x\t\ty_fdm\n");
+    printf("%.2f\t\t%f (邊界)\n", a, alpha);
+    for (int i = 0; i < n_interior; i++) {
+        printf("%.2f\t\t%f\n", a + (i + 1) * h, y_interior_sol[i]);
+    }
+    printf("%.2f\t\t%f (邊界)\n", b, beta);
+
+    free(l_diag);
+    free(d_diag);
+    free(u_diag);
+    free(rhs);
+    free(y_interior_sol);
+}
+
+// --- 3. Variational (Finite Element) Method ---
+// y(x) = y1(x) + y2(x)
+// y1(x) = alpha*(1-(x-a)/(b-a)) + beta*((x-a)/(b-a))
+double y1_fem(double x, double domain_a, double domain_b, double val_alpha, double val_beta) {
+    if (fabs(domain_b - domain_a) < 1e-9) return val_alpha;
+    return val_alpha * (1.0 - (x - domain_a) / (domain_b - domain_a)) + 
+           val_beta * ((x - domain_a) / (domain_b - domain_a));
+}
+// y1'(x) = (beta - alpha) / (b-a)
+double y1_prime_fem(double domain_a, double domain_b, double val_alpha, double val_beta) {
+    if (fabs(domain_b - domain_a) < 1e-9) return 0.0;
+    return (val_beta - val_alpha) / (domain_b - domain_a);
+}
+// y1''(x) = 0
+
+// R_hat(x) = r_orig(x) - (y1'' - p_orig(x)y1' - q_orig(x)y1)
+// Note: original equation is y'' = p_orig y' + q_orig y + r_orig
+// => y'' - p_orig y' - q_orig y = r_orig
+// So R_hat for y2'' - p_orig y2' - q_orig y2 = R_hat is:
+// R_hat = r_orig - (y1'' - p_orig y1' - q_orig y1)
+double R_hat_fem(double x, double domain_a, double domain_b, double val_alpha, double val_beta) {
+    double y1_val = y1_fem(x, domain_a, domain_b, val_alpha, val_beta);
+    double y1_p_val = y1_prime_fem(domain_a, domain_b, val_alpha, val_beta);
+    double y1_pp_val = 0.0; // Since y1 is linear
+
+    return r_orig_func(x) - (y1_pp_val - p_orig_func(x) * y1_p_val - q_orig_func(x) * y1_val);
+}
+
+// Element contributions: k_e and f_e using 1-point Gauss quadrature (midpoint)
+// Weak form: ∫(-v'y2' - v p_orig(x)y2' - v q_orig(x)y2) dx = ∫ v R_hat dx
+// Basis functions for element [xL, xR]: N_L(x)=(xR-x)/h_e, N_R(x)=(x-xL)/h_e
+// Derivatives: N_L'=-1/h_e, N_R'=1/h_e
+void get_element_fem(double xL, double xR, double h_elem,
+                       double *k11, double *k12, double *k21, double *k22,
+                       double *f1, double *f2,
+                       double dom_a, double dom_b, double bc_alpha, double bc_beta) {
+    double x_mid = (xL + xR) / 2.0;
+
+    double p_m = p_orig_func(x_mid);
+    double q_m = q_orig_func(x_mid);
+    double R_hat_m = R_hat_fem(x_mid, dom_a, dom_b, bc_alpha, bc_beta);
+
+    // N_L(mid) = 0.5, N_R(mid) = 0.5
+    // ∫(-N_L'N_L')dx ? -(-1/h_elem)(-1/h_elem)*h_elem = -1/h_elem
+    // ∫(-N_L'N_R')dx ? -(-1/h_elem)(1/h_elem)*h_elem  =  1/h_elem
+    // ∫(-N_R'N_L')dx ? -(1/h_elem)(-1/h_elem)*h_elem  =  1/h_elem
+    // ∫(-N_R'N_R')dx ? -(1/h_elem)(1/h_elem)*h_elem   = -1/h_elem
+
+    // ∫(-N_L p N_L')dx ? -(0.5 * p_m * (-1/h_elem)) * h_elem =  0.5 * p_m
+    // ∫(-N_L p N_R')dx ? -(0.5 * p_m * ( 1/h_elem)) * h_elem = -0.5 * p_m
+    // ∫(-N_R p N_L')dx ? -(0.5 * p_m * (-1/h_elem)) * h_elem =  0.5 * p_m
+    // ∫(-N_R p N_R')dx ? -(0.5 * p_m * ( 1/h_elem)) * h_elem = -0.5 * p_m
+
+    // ∫(-N_L q N_L)dx ? -(0.5 * q_m * 0.5) * h_elem = -0.25 * q_m * h_elem
+    // ∫(-N_L q N_R)dx ? -(0.5 * q_m * 0.5) * h_elem = -0.25 * q_m * h_elem
+    // etc.
+
+    *k11 = (-1.0/h_elem) + (0.5 * p_m) - (0.25 * q_m * h_elem);
+    *k12 = ( 1.0/h_elem) - (0.5 * p_m) - (0.25 * q_m * h_elem);
+    *k21 = ( 1.0/h_elem) + (0.5 * p_m) - (0.25 * q_m * h_elem); // Note N_R p N_L'
+    *k22 = (-1.0/h_elem) - (0.5 * p_m) - (0.25 * q_m * h_elem);
+
+    *f1 = 0.5 * R_hat_m * h_elem;
+    *f2 = 0.5 * R_hat_m * h_elem;
+}
+
+void variational_method(double a, double b, double alpha, double beta, double h) {
+    printf("\n--- c. 變分法 (Variational Method / FEM) ---\n");
+    int n_interior_unknowns = round((b - a) / h) - 1;
+    if (n_interior_unknowns <= 0) {
+        fprintf(stderr, "內部節點數量不足以進行FEM. n_interior_unknowns = %d\n", n_interior_unknowns);
+        return;
+    }
+    int n_elements = n_interior_unknowns + 1;
+
+    double *L_fem = (double *)calloc(n_interior_unknowns - 1, sizeof(double));
+    double *D_fem = (double *)calloc(n_interior_unknowns, sizeof(double));
+    double *U_fem = (double *)calloc(n_interior_unknowns - 1, sizeof(double));
+    double *RHS_fem = (double *)calloc(n_interior_unknowns, sizeof(double));
+    double *y2_interior_sol = (double *)malloc(n_interior_unknowns * sizeof(double));
+
+    if (!L_fem || !D_fem || !U_fem || !RHS_fem || !y2_interior_sol) {
+        fprintf(stderr, "記憶體分配失敗 (FEM).\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Assemble global system for y2
+    for (int e = 0; e < n_elements; ++e) {
+        double xL_elem = a + e * h;
+        double xR_elem = a + (e + 1) * h;
+        double k11, k12, k21, k22, f1, f2;
+        get_element_fem(xL_elem, xR_elem, h, &k11, &k12, &k21, &k22, &f1, &f2, a, b, alpha, beta);
+
+        // Global node indices for this element:
+        // Node L of element 'e' is global node 'e'
+        // Node R of element 'e' is global node 'e+1'
+        // We are solving for interior y2 values: y2_1, ..., y2_{n_interior_unknowns}
+        // These correspond to global nodes 1, ..., n_interior_unknowns.
+        // Global node 0 (y2_0) and global node n_interior_unknowns+1 (y2_{n+1}) are 0.
+        
+        // Contribution to D_fem[e-1] from k11 (if e > 0)
+        if (e > 0) { // Node L is an interior unknown node y2_e
+            D_fem[e-1]   += k11;
+            RHS_fem[e-1] += f1;
+        }
+        // Contribution to D_fem[e] from k22 (if e < n_interior_unknowns)
+        if (e < n_interior_unknowns) { // Node R is an interior unknown node y2_{e+1}
+             D_fem[e]   += k22;
+             RHS_fem[e] += f2;
+        }
+
+        // Off-diagonal:
+        // k12 links unknown at (e) to unknown at (e+1) -> U_fem[e-1] if e>0 and e < n_interior_unknowns
+        // k21 links unknown at (e+1) to unknown at (e) -> L_fem[e] if e>0 and e < n_interior_unknowns
+        if (e > 0 && e < n_interior_unknowns) { // Both L and R are interior unknowns
+            U_fem[e-1] += k12; // k12 affects D_fem[e-1] and D_fem[e]
+            L_fem[e-1] += k21; // k21 affects D_fem[e] and D_fem[e-1]
+        } else if (e == 0 && n_interior_unknowns > 0) { // Element 0, left node is boundary (y2_0=0)
+                                                        // Right node is y2_1 (D_fem[0])
+            U_fem[0] += k12; // Links y2_1 to y2_2 (if exists)
+        } else if (e == n_interior_unknowns -1 && e > 0) { // second to last element for y2 variables
+                                                           // e.g. if n_int=1, e=0. if n_int=2, e=0,1.
+                                                           // L_fem is for D_fem[e] connecting to D_fem[e-1]
+            L_fem[e-1] += k21;
+        }
+    }
+    
+    tdma_solve(L_fem, D_fem, U_fem, RHS_fem, y2_interior_sol, n_interior_unknowns);
+
+    printf("x\t\ty_fem (y1+y2)\n");
+    printf("%.2f\t\t%f (邊界)\n", a, y1_fem(a, a, b, alpha, beta)); 
+
+    for (int i = 0; i < n_interior_unknowns; i++) {
+        double x_node_global = a + (i + 1) * h;
+        double y1_val = y1_fem(x_node_global, a, b, alpha, beta);
+        double y_total = y1_val + y2_interior_sol[i];
+        printf("%.2f\t\t%f\n", x_node_global, y_total);
+    }
+    printf("%.2f\t\t%f (邊界)\n", b, y1_fem(b, a, b, alpha, beta));
+
+    free(L_fem); free(D_fem); free(U_fem); free(RHS_fem); free(y2_interior_sol);
+}
+
+
+int main() {
+    double a_domain = 0.0;
+    double b_domain = 1.0;
+    double y_at_a = 1.0;
+    double y_at_b = 2.0;
+    double h_step = 0.1;
+
+    printf("求解 BVP: y'' = -(x+1)y' + 2y + (1-x^2)e^(-x)\n");
+    printf("定義域: [%.1f, %.1f], 邊界條件: y(%.1f)=%.1f, y(%.1f)=%.1f, h=%.2f\n",
+           a_domain, b_domain, a_domain, y_at_a, b_domain, y_at_b, h_step);
+
+    shooting_method(a_domain, b_domain, y_at_a, y_at_b, h_step);
+    finite_difference_method(a_domain, b_domain, y_at_a, y_at_b, h_step);
+    variational_method(a_domain, b_domain, y_at_a, y_at_b, h_step);
+
+    return 0;
+}
