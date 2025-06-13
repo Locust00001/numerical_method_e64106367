@@ -1,0 +1,72 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# %% 問題 4: 求解一維波動方程
+print("\n--- Solving Problem 4: 1D Wave Equation ---")
+
+# 1. 參數設定
+dx = 0.1
+dt = 0.1
+x_start, x_end = 0, 1
+t_start, t_end = 0, 2.0  # 模擬 2 秒
+
+x = np.arange(x_start, x_end + dx, dx)
+t = np.arange(t_start, t_end + dt, dt)
+Nx = len(x)
+Nt = len(t)
+
+# 2. 初始化解矩陣 P
+P = np.zeros((Nt, Nx))
+
+# 3. 初始條件
+# p(x,0) = cos(2*pi*x)
+P[0, :] = np.cos(2 * np.pi * x)
+
+# 初始速度 g(x) = 2*pi*sin(2*pi*x)
+def g(xi):
+    return 2 * np.pi * np.sin(2 * np.pi * xi)
+
+# 4. 計算第一個時間步 (j=1)
+for i in range(1, Nx - 1): # 內部點
+    P[1, i] = 0.5 * (P[0, i+1] + P[0, i-1]) + dt * g(x[i])
+
+# 應用邊界條件
+P[0, 0] = 1
+P[0, -1] = 2  # 初始位移在邊界上和邊界條件不一致，以邊界條件為準
+P[1, 0] = 1
+P[1, -1] = 2
+
+# 5. 時間迭代 (j=2 onwards)
+for j in range(1, Nt - 1):
+    for i in range(1, Nx - 1): # 內部點
+        P[j+1, i] = P[j, i+1] + P[j, i-1] - P[j-1, i]
+    
+    # 每一步都強制應用邊界條件
+    P[j+1, 0] = 1
+    P[j+1, -1] = 2
+
+# 6. 繪圖
+plt.figure(figsize=(12, 7))
+plt.title("Problem 4: Solution of the 1D Wave Equation")
+# 繪製幾個特定時間點的波形
+plot_times_indices = [0, int(Nt/4), int(Nt/2), int(3*Nt/4), Nt-1]
+for j in plot_times_indices:
+    plt.plot(x, P[j, :], label=f't = {t[j]:.2f} s')
+
+plt.xlabel('Position x')
+plt.ylabel('Displacement p(x,t)')
+plt.legend()
+plt.grid(True)
+plt.ylim(-3, 3)
+plt.show()
+
+# 繪製 3D 表面圖
+T, X = np.meshgrid(t, x)
+fig = plt.figure(figsize=(10, 7))
+ax = fig.add_subplot(111, projection='3d')
+ax.plot_surface(X, T, P.T, cmap='ocean') # P.T because P is (t, x)
+ax.set_title("3D view of the Wave Propagation")
+ax.set_xlabel('Position x')
+ax.set_ylabel('Time t')
+ax.set_zlabel('Displacement p(x,t)')
+plt.show()
