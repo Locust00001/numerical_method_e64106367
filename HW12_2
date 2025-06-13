@@ -1,0 +1,176 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# %% 問題 2 的詳細解釋與實現
+
+def solve_heat_equation_detailed():
+    """
+    這是一個完整的、帶有詳細註解的求解器，用於解決問題二。
+    """
+    # =========================================================================
+    # 1. 問題設定與參數 (Problem Setup & Parameters)
+    # =========================================================================
+    # 物理參數
+    K = 0.1                     # 熱傳導相關係數
+    D = 4 * K                   # 擴散係數 (Diffusion coefficient)
+
+    # 空間網格設定
+    r_start, r_end = 0.5, 1.0   # 半徑範圍
+    dr = 0.1                    # 半徑步長
+    r = np.arange(r_start, r_end + dr, dr) # 半徑網格點
+    Nr = len(r)                 # 空間點的總數
+
+    # 時間網格設定
+    t_start, t_end = 0, 10.0    # 時間範圍
+    dt = 0.5                    # 時間步長
+    t = np.arange(t_start, t_end + dt, dt) # 時間網格點
+    Nt = len(t)                 # 時間點的總數
+
+    print(f"空間網格點數 Nr = {Nr}")
+    print(f"時間網格點數 Nt = {Nt}")
+    print(f"穩定性參數 alpha = D*dt/dr^2 = {D*dt/dr**2:.2f}")
+
+    # =========================================================================
+    # 2. 初始與邊界條件 (Initial & Boundary Conditions)
+    # =========================================================================
+    # 建立一個空的 (Nt x Nr) 矩陣來儲存所有時間和空間點的溫度
+    T = np.zeros((Nt, Nr))
+
+    # 應用初始條件 T(r, 0)
+    T[0, :] = 200 * (r - 0.5)
+
+    # 邊界條件是一個函式，方便在迴圈中調用
+    def boundary_T_at_r_end(time_point):
+        return 100 + 40 * time_point
+
+    # =========================================================================
+    # 3. 核心求解器：建立矩陣 A 和向量 b (for BTCS & Crank-Nicolson)
+    # =========================================================================
+    # 對於隱式方法，我們需要解 Ax = b。矩陣 A 只跟空間網格和方法有關，
+    # 所以可以在時間迴圈外先建立好。
+
+    # --- BTCS 方法的矩陣 A ---
+    A_btcs = np.zeros((Nr, Nr))
+    # 內部點 (i=1 to Nr-2)
+    for i in range(1, Nr - 1):
+        ri = r[i]
+        # 這些係數來自離散化的 PDE
+        coeff_minus = D * dt / (dr**2) - D * dt / (2 * ri * dr)
+        coeff_plus = D * dt / (dr**2) + D * dt / (2 * ri * dr)
+        A_btcs[i, i-1] = -coeff_minus
+        A_btcs[i, i]   = 1 + 2 * D * dt / (dr**2)
+        A_btcs[i, i+1] = -coeff_plus
+    # 邊界點
+    # i=0 (Robin 邊界): 這是將 T_{-1} 代入 PDE 後得到的公式
+    A_btcs[0, 0] = 1 + 2*D*dt/dr**2 - (D*dt/(2*r[0]*dr)) * (-6*dr) # Term from T0
+    A_btcs[0, 1] = -2*D*dt/dr**2 - (D*dt/(2*r[0]*dr)) * (2)       # Term from T1 simplified
+    # i=Nr-1 (Dirichlet 邊界): T 在這裡的值是已知的，所以設為 T_new = known_value
+    A_btcs[Nr-1, Nr-1] = 1
+
+    # --- Crank-Nicolson 方法的矩陣 A ---
+    A_cn = np.zeros((Nr, Nr))
+    # 內部點 (i=1 to Nr-2)
+    for i in range(1, Nr - 1):
+        ri = r[i]
+        coeff_minus = D * dt / (dr**2) - D * dt / (2 * ri * dr)
+        coeff_plus = D * dt / (dr**2) + D * dt / (2 * ri * dr)
+        A_cn[i, i-1] = -coeff_minus / 2
+        A_cn[i, i]   = 1 + D * dt / (dr**2)
+        A_cn[i, i+1] = -coeff_plus / 2
+    # 邊界點
+    # i=0 (Robin 邊界)
+    A_cn[0, 0] = 1 + D*dt/dr**2 - (D*dt/(4*r[0]*dr))*(-6*dr)
+    A_cn[0, 1] = -D*dt/dr**2 - (D*dt/(4*r[0]*dr))*(2)
+    # i=Nr-1 (Dirichlet 邊界)
+    A_cn[Nr-1, Nr-1] = 1
+
+
+    # =========================================================================
+    # 4. 時間迭代求解 (Time Marching Loop)
+    # =========================================================================
+    # 我們需要為三種方法分別儲存結果
+    T_ftcs = T.copy()
+    T_btcs = T.copy()
+    T_cn = T.copy()
+
+    for j in range(Nt - 1): # 從 t=0 迭代到 t=t_end-dt
+        # T_current 是 j 時刻的已知溫度分佈
+        T_current_ftcs = T_ftcs[j, :].copy()
+        T_current_btcs = T_btcs[j, :].copy()
+        T_current_cn   = T_cn[j, :].copy()
+
+        # T_next 是我們要求解的 j+1 時刻的溫度分佈
+        T_next_ftcs = T_ftcs[j+1, :].copy()
+        T_next_btcs = T_btcs[j+1, :].copy()
+        T_next_cn   = T_cn[j+1, :].copy()
+
+        # --- (a) FTCS 求解 ---
+        # 內部點
+        for i in range(1, Nr - 1):
+            ri = r[i]
+            T_next_ftcs[i] = T_current_ftcs[i] + (D*dt/dr**2)*(T_current_ftcs[i+1] - 2*T_current_ftcs[i] + T_current_ftcs[i-1]) \
+                             + (D*dt/(2*ri*dr))*(T_current_ftcs[i+1] - T_current_ftcs[i-1])
+        # 邊界 i=0 (Robin)
+        T_minus_1_ftcs = T_current_ftcs[1] + 6 * dr * T_current_ftcs[0] # 計算虛擬點
+        T_next_ftcs[0] = T_current_ftcs[0] + (D*dt/dr**2)*(T_current_ftcs[1] - 2*T_current_ftcs[0] + T_minus_1_ftcs) \
+                         + (D*dt/(2*r[0]*dr))*(T_current_ftcs[1] - T_minus_1_ftcs)
+        # 邊界 i=Nr-1 (Dirichlet)
+        T_next_ftcs[-1] = boundary_T_at_r_end(t[j+1])
+        T_ftcs[j+1, :] = T_next_ftcs
+        
+        # --- (b) BTCS 求解 ---
+        b_btcs = T_current_btcs # 右手邊向量就是當前時間步的溫度
+        b_btcs[-1] = boundary_T_at_r_end(t[j+1]) # 右手邊最後一個值是已知的邊界溫度
+        T_btcs[j+1, :] = np.linalg.solve(A_btcs, b_btcs)
+
+        # --- (c) Crank-Nicolson 求解 ---
+        b_cn = np.zeros(Nr)
+        # 內部點
+        for i in range(1, Nr - 1):
+            ri = r[i]
+            coeff_minus = D * dt / (dr**2) - D * dt / (2 * ri * dr)
+            coeff_plus = D * dt / (dr**2) + D * dt / (2 * ri * dr)
+            b_cn[i] = (coeff_minus / 2) * T_current_cn[i-1] + \
+                      (1 - D*dt/dr**2) * T_current_cn[i] + \
+                      (coeff_plus / 2) * T_current_cn[i+1]
+        # 邊界 i=0 (Robin)
+        T_minus_1_cn = T_current_cn[1] + 6*dr*T_current_cn[0]
+        b_cn[0] = T_current_cn[0] - (D*dt/(2*dr**2))*(T_current_cn[1] - 2*T_current_cn[0] + T_minus_1_cn) \
+                  - (D*dt/(4*r[0]*dr))*(T_current_cn[1] - T_minus_1_cn)
+        # 邊界 i=Nr-1 (Dirichlet)
+        b_cn[-1] = boundary_T_at_r_end(t[j+1])
+        T_cn[j+1, :] = np.linalg.solve(A_cn, b_cn)
+
+    return r, t, T_ftcs, T_btcs, T_cn
+
+# =========================================================================
+# 5. 執行求解並繪圖 (Execute Solver and Plot)
+# =========================================================================
+r_pts, t_pts, T_ftcs_sol, T_btcs_sol, T_cn_sol = solve_heat_equation_detailed()
+
+# 繪製結果
+fig, axes = plt.subplots(1, 3, figsize=(22, 7))
+fig.suptitle("Problem 2: Detailed Heat Equation Solutions", fontsize=16)
+
+solutions = {
+    'Forward-Difference (FTCS)': T_ftcs_sol,
+    'Backward-Difference (BTCS)': T_btcs_sol,
+    'Crank-Nicolson': T_cn_sol
+}
+plot_times_indices = [0, int(len(t_pts)/4), int(len(t_pts)/2), int(3*len(t_pts)/4), len(t_pts)-1]
+
+for i, (title, T_sol) in enumerate(solutions.items()):
+    ax = axes[i]
+    for j in plot_times_indices:
+        ax.plot(r_pts, T_sol[j, :], marker='o', markersize=4, linestyle='-', label=f't = {t_pts[j]:.1f}')
+    ax.set_title(title)
+    ax.set_xlabel('Radius r')
+    ax.set_ylabel('Temperature T')
+    ax.legend()
+    ax.grid(True)
+    # 為了讓穩定解的圖形清晰可見，我們設定一個合理的 Y 軸範圍
+    if "FTCS" not in title:
+        ax.set_ylim(-50, 550)
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
